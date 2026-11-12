@@ -6,6 +6,7 @@ const toast = document.getElementById("toast");
 let courses = [];
 let student = null;
 let enrolledCourseIds = [];
+let courseProgressMap = new Map();
 let activeCourseId = null;
 let selectedPayment = "MTN MoMo";
 let toastTimer;
@@ -73,6 +74,87 @@ function isEnrolled(courseId) {
   return enrolledCourseIds.includes(courseId);
 }
 
+function getCourseProgress(course) {
+  const courseId = typeof course === "string" ? course : course.id;
+  const courseObj = typeof course === "string" ? courses.find(c => c.id === courseId) : course;
+  const total = Number(courseObj?.lesson_count || (courseObj?.lessons ? courseObj.lessons.length : 0)) || 1;
+
+  if (!student || !isEnrolled(courseId)) {
+    return {
+      enrolled: false,
+      completedCount: 0,
+      totalCount: total,
+      percent: 0,
+      label: student ? "Not enrolled" : "Available",
+      status: "unstarted"
+    };
+  }
+
+  const progress = courseProgressMap.get(courseId);
+  const completed = progress ? progress.completedCount : 0;
+  const percent = Math.min(100, Math.round((completed / total) * 100));
+
+  let label = `${completed}/${total} lessons`;
+  let status = "in-progress";
+  if (percent === 100) {
+    label = "Completed";
+    status = "completed";
+  } else if (percent === 0) {
+    label = "Enrolled";
+    status = "enrolled";
+  }
+
+  return {
+    enrolled: true,
+    completedCount: completed,
+    totalCount: total,
+    percent,
+    label,
+    status
+  };
+}
+
+function renderCourseProgressBar(course) {
+  const prog = getCourseProgress(course);
+  return `
+    <div class="course-card-progress" data-course-progress="${escapeHTML(course.id)}">
+      <div class="course-progress-header">
+        <span class="course-progress-badge ${prog.status}">${escapeHTML(prog.label)}</span>
+        <span class="course-progress-percent">${prog.percent}%</span>
+      </div>
+      <div class="course-progress-track" role="progressbar" aria-valuenow="${prog.percent}" aria-valuemin="0" aria-valuemax="100" aria-label="${escapeHTML(course.title)} completion: ${prog.percent}%">
+        <div class="course-progress-fill ${prog.status}" style="width: ${prog.percent}%;"></div>
+      </div>
+      <div class="course-progress-subtext">
+        <span>${prog.enrolled ? (prog.percent === 100 ? "All lessons completed" : `${prog.completedCount} of ${prog.totalCount} completed`) : (student ? "Enroll to track" : "Preview available")}</span>
+        <a href="/student/dashboard" data-route="/student/dashboard" class="course-mylearning-link" title="Open My Learning dashboard" aria-label="Open ${escapeHTML(course.title)} in My Learning">My learning ↗</a>
+      </div>
+    </div>
+  `;
+}
+
+async function refreshUserProgress() {
+  if (!student || !enrolledCourseIds.length) {
+    courseProgressMap.clear();
+    return;
+  }
+  const enrolledCourses = courses.filter(course => isEnrolled(course.id));
+  await Promise.all(enrolledCourses.map(async course => {
+    try {
+      const progress = await api(`/api/courses/${encodeURIComponent(course.id)}/progress`);
+      const completedCount = progress.completedLessonIds.length;
+      const totalCount = Number(course.lesson_count || (course.lessons ? course.lessons.length : 0)) || 1;
+      const percent = Math.min(100, Math.round((completedCount / totalCount) * 100));
+      courseProgressMap.set(course.id, {
+        completedCount,
+        totalCount,
+        percent,
+        completedLessonIds: progress.completedLessonIds
+      });
+    } catch (err) {}
+  }));
+}
+
 function updateSignInButton() {
   document.getElementById("sign-in-open").textContent = student ? student.name.split(/\s+/)[0] : "Sign in";
   document.getElementById("profile-name").textContent = student ? student.name : "B Render Academy learner";
@@ -110,14 +192,37 @@ function renderHeroFeaturedCourse() {
 }
 
 function renderCourses(level = "all") {
-  const search = document.getElementById("course-search").value.trim().toLowerCase();
+  const searchInput = document.getElementById("course-search");
+  const search = searchInput ? searchInput.value.trim().toLowerCase() : "";
   const filtered = courses.filter(course =>
     (level === "all" || course.level === level) &&
     (!search || `${course.title} ${course.category} ${course.subtitle}`.toLowerCase().includes(search))
   );
-  document.getElementById("course-count").textContent = `${String(filtered.length).padStart(2, "0")} classes`;
-  const featured = filtered.slice(0, 3);
-  grid.innerHTML = featured.length ? featured.map((course, index) => `
+  const count = filtered.length;
+
+  const visibleCountEl = document.getElementById("course-visible-count");
+  if (visibleCountEl) {
+    if (count === 0) {
+      visibleCountEl.innerHTML = `No courses found${search ? ` matching &ldquo;<strong>${escapeHTML(search)}</strong>&rdquo;` : ""}${level !== "all" ? ` at <strong>${escapeHTML(level)}</strong> level` : ""}`;
+    } else {
+      let filterText = "";
+      if (search && level !== "all") {
+        filterText = ` matching &ldquo;<strong>${escapeHTML(search)}</strong>&rdquo; in <strong>${escapeHTML(level)}</strong>`;
+      } else if (search) {
+        filterText = ` matching &ldquo;<strong>${escapeHTML(search)}</strong>&rdquo;`;
+      } else if (level !== "all") {
+        filterText = ` in <strong>${escapeHTML(level)}</strong>`;
+      }
+      visibleCountEl.innerHTML = `Showing <strong>${count}</strong> course${count === 1 ? "" : "s"} visible${filterText}`;
+    }
+  }
+
+  const bottomCountEl = document.getElementById("course-count");
+  if (bottomCountEl) {
+    bottomCountEl.textContent = `${String(count).padStart(2, "0")} classes`;
+  }
+
+  grid.innerHTML = filtered.length ? filtered.map((course, index) => `
     <article class="course-card tile-tone-${index % 3}" tabindex="0" role="button" aria-label="Open ${escapeHTML(course.title)} class" data-course="${escapeHTML(course.id)}">
       <div class="course-image">
         <img src="${escapeHTML(course.image || imageFallback)}" alt="" loading="lazy" />
@@ -126,6 +231,7 @@ function renderCourses(level = "all") {
       </div>
       <div class="course-meta"><span>${escapeHTML(course.category || "Studio course")}</span><span>${escapeHTML(course.lesson_count || 0)} lessons</span></div>
       <h3>${escapeHTML(course.title)}</h3>
+      ${renderCourseProgressBar(course)}
     </article>
   `).join("") : `<div class="empty-state">No matching classes. Try another search or level.</div>`;
   renderReminders();
@@ -136,6 +242,13 @@ function renderCourses(level = "all") {
         event.preventDefault();
         navigate(`/programs/${encodeURIComponent(card.dataset.course)}`);
       }
+    });
+  });
+  grid.querySelectorAll(".course-mylearning-link").forEach(link => {
+    link.addEventListener("click", event => {
+      event.stopPropagation();
+      event.preventDefault();
+      navigate("/student/dashboard");
     });
   });
   document.querySelectorAll("[data-course-reminder]").forEach(button => {
@@ -207,12 +320,23 @@ function renderRouteProgramCards(list) {
       <div class="course-meta"><span>${escapeHTML(course.category || "Studio course")}</span><span>${escapeHTML(course.lesson_count || 0)} lessons</span></div>
       <h3>${escapeHTML(course.title)}</h3>
       <p class="course-subtitle">${escapeHTML(course.subtitle || "A guided architecture design course.")}</p>
+      ${renderCourseProgressBar(course)}
     </button>
   `).join("") : `<p class="route-empty">No programs match these filters.</p>`;
   cards.querySelectorAll("[data-route-course]").forEach(card => {
     card.addEventListener("click", () => navigate(`/programs/${encodeURIComponent(card.dataset.routeCourse)}`));
   });
-  document.getElementById("route-program-count").textContent = `${list.length} program${list.length === 1 ? "" : "s"}`;
+  cards.querySelectorAll(".course-mylearning-link").forEach(link => {
+    link.addEventListener("click", event => {
+      event.stopPropagation();
+      event.preventDefault();
+      navigate("/student/dashboard");
+    });
+  });
+  const routeCountEl = document.getElementById("route-program-count");
+  if (routeCountEl) {
+    routeCountEl.innerHTML = `Showing <strong>${list.length}</strong> course${list.length === 1 ? "" : "s"} visible`;
+  }
 }
 
 async function renderStudentDashboard(renderId) {
@@ -238,7 +362,16 @@ async function renderStudentDashboard(renderId) {
   const progressResults = await Promise.all(enrolledCourses.map(async course => {
     try {
       const progress = await api(`/api/courses/${encodeURIComponent(course.id)}/progress`);
-      return { id: course.id, completed: progress.completedLessonIds.length };
+      const completedCount = progress.completedLessonIds.length;
+      const totalCount = Number(course.lesson_count || 0) || 1;
+      const percent = Math.min(100, Math.round((completedCount / totalCount) * 100));
+      courseProgressMap.set(course.id, {
+        completedCount,
+        totalCount,
+        percent,
+        completedLessonIds: progress.completedLessonIds
+      });
+      return { id: course.id, completed: completedCount, percent };
     } catch (error) {
       return { id: course.id, error };
     }
@@ -756,7 +889,10 @@ function showSignIn(message = "Sign in to continue learning.", options = {}) {
       });
       student = result.user;
       enrolledCourseIds = result.enrolledCourseIds;
+      await refreshUserProgress();
       updateSignInButton();
+      const currentLevel = document.getElementById("level-filter") ? document.getElementById("level-filter").value : "all";
+      renderCourses(currentLevel);
       const resumeCourseId = result.addedCourseId || courseId;
       closeModal();
       showToast(result.demoPayment ? "Course unlocked after demo checkout." : `Welcome, ${student.name.split(/\s+/)[0]}.`);
@@ -895,6 +1031,9 @@ async function openLessonPlayer(course, index, completed = new Set()) {
         button.disabled = false;
         if (quizResult.correct) {
           completed.add(lesson.id);
+          await refreshUserProgress();
+          const currentLevel = document.getElementById("level-filter") ? document.getElementById("level-filter").value : "all";
+          renderCourses(currentLevel);
           button.textContent = index + 1 < course.lessons.length ? "Continue to next lesson →" : "Back to course";
           button.addEventListener("click", clickEvent => {
             clickEvent.preventDefault();
@@ -920,6 +1059,9 @@ async function refreshSession() {
   const result = await api("/api/me");
   student = result.user;
   enrolledCourseIds = result.enrolledCourseIds;
+  if (courses && courses.length) {
+    await refreshUserProgress();
+  }
   updateSignInButton();
 }
 
@@ -938,7 +1080,9 @@ document.getElementById("sign-in-open").addEventListener("click", async () => {
       await api("/api/auth/logout", { method: "POST", body: "{}" });
       student = null;
       enrolledCourseIds = [];
+      courseProgressMap.clear();
       updateSignInButton();
+      renderCourses(document.getElementById("level-filter")?.value || "all");
       if (window.location.pathname === "/student/dashboard") await renderRoute();
       showToast("You have signed out.");
     } catch (error) {
@@ -1018,8 +1162,12 @@ window.addEventListener("popstate", renderRoute);
 
 async function initialize() {
   try {
-    const [courseResult] = await Promise.all([api("/api/courses"), refreshSession()]);
+    const [courseResult, sessionResult] = await Promise.all([api("/api/courses"), api("/api/me")]);
     courses = courseResult.courses;
+    student = sessionResult.user;
+    enrolledCourseIds = sessionResult.enrolledCourseIds;
+    await refreshUserProgress();
+    updateSignInButton();
     renderCourses();
     renderHeroFeaturedCourse();
     await renderRoute();
