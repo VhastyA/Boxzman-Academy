@@ -1,0 +1,13 @@
+{
+  "name": "forma-architecture-academy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "B Render architectural visualization website",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=24.15.0"
+  }
+}

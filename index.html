@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#11141b" />
+    <meta
+      name="description"
+      content="Learn architecture from the B Render family. Explore practical courses in architectural drawing, design, materials, and space."
+    />
+    <title>B Render Family Architecture Academy</title>
+    <link rel="icon" type="image/png" href="/assets/b-render-logo.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="university-site br-site academy-site">
+    <header class="university-header br-header academy-header">
+      <a class="university-brand br-brand" href="/" data-route="/" aria-label="B Render Family Architecture Academy home">
+        <img class="br-logo" src="/assets/b-render-logo.png" alt="B Render" />
+        <span><small>FAMILY ARCHITECTURE ACADEMY</small></span>
+      </a>
+      <button class="mobile-menu" id="menu-toggle" aria-label="Toggle navigation" aria-expanded="false">
+        <span></span><span></span>
+      </button>
+      <nav class="sidebar-nav university-nav" aria-label="Main navigation">
+        <a class="sidebar-link active" href="/" data-route="/">Home</a>
+        <a class="sidebar-link" href="/about" data-route="/about">About the academy</a>
+        <a class="sidebar-link" href="/programs" data-route="/programs">Courses</a>
+        <a class="sidebar-link" href="/news" data-route="/news">Learning approach</a>
+        <a class="sidebar-link" href="/student/dashboard" data-route="/student/dashboard">My learning</a>
+      </nav>
+      <div class="university-actions br-header-actions">
+        <button class="br-header-contact" id="sign-in-open" type="button">Student sign in <span aria-hidden="true">↗</span></button>
+        <button class="university-profile" id="profile-open" type="button" aria-label="Open student profile"><span id="profile-avatar">B</span></button>
+      </div>
+    </header>
+
+    <main>
+      <section class="br-hero academy-hero" id="home">
+        <div class="br-hero-image" aria-hidden="true"></div>
+        <div class="br-hero-shade" aria-hidden="true"></div>
+        <div class="academy-hero-copy">
+          <span class="br-eyebrow"><i></i> LEARN ARCHITECTURE WITH THE B RENDER FAMILY</span>
+          <h1>DESIGN YOUR<br /><span>UNDERSTANDING</span><br />OF ARCHITECTURE</h1>
+          <p>Practical lessons in drawing, space, materials, and design—taught by the B Render family.</p>
+          <div class="br-hero-actions">
+            <a class="br-button br-button-gold" href="#classes">EXPLORE COURSES <span aria-hidden="true">↘</span></a>
+            <a class="br-button br-button-outline" href="/about" data-route="/about">MEET THE ACADEMY</a>
+          </div>
+        </div>
+        <div class="academy-hero-feature">
+          <span class="br-eyebrow"><i></i> START LEARNING</span>
+          <h2>Build your eye.<br />Shape your ideas.</h2>
+          <p>Self-paced architecture courses, from first sketch to complete design.</p>
+          <div class="academy-hero-count"><strong id="hero-course-count">06+</strong><span>architecture<br />courses to explore</span></div>
+        </div>
+        <a class="academy-featured-course" id="hero-featured-course" href="/programs" data-route="/programs">
+          <img class="featured-course-image" src="https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&amp;fit=crop&amp;w=500&amp;q=80" alt="" />
+          <span class="featured-course-copy"><span class="university-eyebrow">FEATURED COURSE</span><strong>Explore architecture courses</strong><span>Learn at your own pace</span></span>
+          <span class="featured-course-arrow" aria-hidden="true">↗</span>
+        </a>
+        <span class="br-hero-index"><strong>01</strong><span>LEARN<br />BY DESIGN</span></span>
+      </section>
+
+      <section class="academy-welcome" id="about">
+        <div class="academy-welcome-copy">
+          <span class="br-eyebrow"><i></i> A FAMILY-LED ARCHITECTURE ACADEMY</span>
+          <h2>Architecture is more than buildings.<br /><em>It’s a way of seeing.</em></h2>
+          <p>The B Render family created this academy to make architectural thinking practical and accessible. Learn to observe the spaces around you, draw your ideas clearly, and make thoughtful design decisions.</p>
+          <a class="br-text-link" href="/about" data-route="/about">DISCOVER THE ACADEMY <span aria-hidden="true">↗</span></a>
+        </div>
+        <div class="academy-family-card">
+          <span class="academy-family-monogram" aria-hidden="true">B</span>
+          <span class="br-eyebrow"><i></i> LEARNING WITH B RENDER</span>
+          <h3>From our family<br />to future designers.</h3>
+          <p>Real design principles. Clear lessons. Space to grow your own point of view.</p>
+        </div>
+      </section>
+
+      <section class="program-section academy-programs" id="classes">
+        <div class="program-heading">
+          <div>
+            <span class="br-eyebrow"><i></i> LEARN WITH THE B RENDER FAMILY</span>
+            <h2>Find a course.<br /><em>Begin designing.</em></h2>
+          </div>
+          <div class="program-controls">
+            <label class="program-search"><span aria-hidden="true">⌕</span><input id="course-search" type="search" placeholder="Search courses" aria-label="Search courses" /></label>
+            <label class="filter-label">Level
+              <select id="level-filter" aria-label="Filter courses by level">
+                <option value="all">All levels</option>
+                <option value="Beginner">Beginner</option>
+                <option value="Intermediate">Intermediate</option>
+                <option value="Advanced">Advanced</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div class="program-grid course-grid" id="course-grid"></div>
+        <div class="program-bottom">
+          <span><span class="course-count" id="course-count"></span> · Self-paced architecture lessons</span>
+          <a class="academy-all-courses" href="/programs" data-route="/programs">VIEW ALL COURSES <span aria-hidden="true">↗</span></a>
+        </div>
+      </section>
+
+      <section class="academy-method" id="method">
+        <div class="academy-method-heading">
+          <span class="br-eyebrow"><i></i> THE B RENDER FAMILY APPROACH</span>
+          <h2>Learn the principles.<br /><em>Practice the process.</em></h2>
+        </div>
+        <div class="academy-method-grid">
+          <article><span>01</span><h3>OBSERVE</h3><p>Study how people, light, climate, and place shape the built environment.</p></article>
+          <article><span>02</span><h3>DRAW</h3><p>Use plans and sketches to communicate spatial ideas clearly.</p></article>
+          <article><span>03</span><h3>DESIGN</h3><p>Bring your ideas together into thoughtful spaces made for people.</p></article>
+        </div>
+      </section>
+
+      <section class="academy-contact" id="contact">
+        <div>
+          <span class="br-eyebrow"><i></i> LEARN WITH THE B RENDER FAMILY</span>
+          <h2>Your architecture journey<br />starts with <em>one idea.</em></h2>
+          <p>Explore the courses, find your starting point, and begin learning at your own pace.</p>
+          <a class="br-button br-button-gold" href="/programs" data-route="/programs">BROWSE ALL COURSES <span aria-hidden="true">↗</span></a>
+        </div>
+        <div class="br-contact-card academy-contact-card">
+          <span class="br-contact-kicker">CONNECT WITH B RENDER</span>
+          <a href="tel:+233552638169"><span aria-hidden="true">◉</span> 055 263 8169</a>
+          <a href="https://www.instagram.com/b_render1/" target="_blank" rel="noopener noreferrer"><span>◎</span> Instagram <strong>@b_render1</strong></a>
+          <a href="https://www.tiktok.com/@b.render5" target="_blank" rel="noopener noreferrer"><span>♪</span> TikTok <strong>@b.render5</strong></a>
+          <a href="https://www.youtube.com/results?search_query=B-render" target="_blank" rel="noopener noreferrer"><span>▶</span> YouTube <strong>B-render</strong></a>
+        </div>
+      </section>
+
+      <div class="academy-legacy-tools" aria-hidden="true">
+        <select id="hero-level-filter"><option value="all">All levels</option><option value="Beginner">Beginner</option><option value="Intermediate">Intermediate</option><option value="Advanced">Advanced</option></select>
+        <span id="profile-name"></span><span id="hero-avatar"></span>
+        <button id="hero-profile-open" type="button"></button><button id="join-open" type="button"></button>
+        <button id="admin-open" type="button"></button><button id="live-lessons-open" type="button"></button>
+        <div id="reminder-list"></div><span id="calendar-month"></span><div id="calendar-days"></div>
+        <button id="calendar-prev" type="button"></button><button id="calendar-next" type="button"></button>
+      </div>
+    </main>
+
+    <footer class="university-footer br-footer academy-footer">
+      <div class="footer-brand">
+        <a class="university-brand br-brand" href="/" data-route="/" aria-label="B Render Family Architecture Academy home">
+          <img class="br-logo" src="/assets/b-render-logo.png" alt="B Render" />
+          <span><small>FAMILY ARCHITECTURE ACADEMY</small></span>
+        </a>
+        <p>Architecture, taught with purpose.<br />Learn at your own pace.</p>
+      </div>
+      <div class="footer-column"><strong>ACADEMY</strong><a href="/about" data-route="/about">About the academy</a><a href="/programs" data-route="/programs">Architecture courses</a><a href="/news" data-route="/news">Our learning approach</a></div>
+      <div class="footer-column"><strong>CONNECT</strong><a href="tel:+233552638169">055 263 8169</a><a href="https://wa.me/233552638169" target="_blank" rel="noopener noreferrer">WhatsApp B Render</a><button id="footer-teach" type="button">Admin dashboard</button></div>
+      <div class="footer-social"><span>FOLLOW B RENDER</span><div><a href="https://www.instagram.com/b_render1/" target="_blank" rel="noopener noreferrer">IG</a>　<a href="https://www.tiktok.com/@b.render5" target="_blank" rel="noopener noreferrer">TT</a>　<a href="https://www.youtube.com/results?search_query=B-render" target="_blank" rel="noopener noreferrer">YT</a></div><small>© 2026 B Render Family Academy</small></div>
+      <div class="footer-ribbon" aria-hidden="true"></div>
+    </footer>
+
+    <div class="modal-backdrop" id="modal-backdrop" hidden>
+      <section class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <button class="modal-close" id="modal-close" aria-label="Close dialog">×</button>
+        <div id="modal-content"></div>
+      </section>
+    </div>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <span class="today-label" id="today-label" hidden></span>
+    <script src="/app.js"></script>
+  </body>
+</html>

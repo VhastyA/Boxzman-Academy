@@ -1,0 +1,83 @@
+[
+  {
+    "id": "seeing-space",
+    "title": "Seeing Space",
+    "subtitle": "Train your eye to notice the spaces around you.",
+    "level": "Beginner",
+    "category": "Foundations",
+    "duration": "4 lessons · 48 min",
+    "image": "https://images.unsplash.com/photo-1600210492486-724fe5c67fb0?auto=format&fit=crop&w=900&q=80",
+    "lessons": [
+      {"title":"The architecture of looking","duration":"12 min","quiz":"What is the first step in observing a space?","choices":["Notice how light moves through it","Choose a paint color","Measure the furniture"],"answer":0},
+      {"title":"Light, shadow & atmosphere","duration":"14 min","quiz":"Which drawing technique best records changing sunlight?","choices":["A single floor plan","A time-based light study","A materials list"],"answer":1},
+      {"title":"Mapping the everyday","duration":"10 min","quiz":"What can a movement map help a designer understand?","choices":["How people use and move through a place","The cost of concrete","A building's age"],"answer":0},
+      {"title":"Your first spatial sketch","duration":"12 min","quiz":"A useful first sketch should primarily communicate…","choices":["Every construction detail","The main spatial idea","The final paint finish"],"answer":1}
+    ]
+  },
+  {
+    "id": "drawing-basics",
+    "title": "Drawing the Plan",
+    "subtitle": "Turn observations into clear architectural drawings.",
+    "level": "Beginner",
+    "category": "Drawing",
+    "duration": "3 lessons · 42 min",
+    "image": "https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&w=900&q=80",
+    "lessons": [
+      {"title":"A plan is a point of view","duration":"13 min","quiz":"A floor plan is conventionally drawn as if you are looking…","choices":["Straight down through a horizontal cut","Up from below the floor","From far across the street"],"answer":0},
+      {"title":"Scale without the guesswork","duration":"15 min","quiz":"What does a 1:100 drawing scale mean?","choices":["1 unit on the drawing equals 100 units in reality","100 rooms fit on one page","The drawing is 100% complete"],"answer":0},
+      {"title":"Line weight tells a story","duration":"14 min","quiz":"In a plan, which elements usually use the heaviest line?","choices":["Cut walls","Furniture","Dimension strings"],"answer":0}
+    ]
+  },
+  {
+    "id": "materials-place",
+    "title": "Materials & Place",
+    "subtitle": "Choose materials with climate, craft and context in mind.",
+    "level": "Beginner",
+    "category": "Materials",
+    "duration": "2 lessons · 28 min",
+    "image": "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?auto=format&fit=crop&w=900&q=80",
+    "lessons": [
+      {"title":"Read the site first","duration":"14 min","quiz":"Why study local climate before choosing materials?","choices":["To respond to heat, rain and light","To avoid drawing a plan","To select a building name"],"answer":0},
+      {"title":"The life of a material","duration":"14 min","quiz":"A material's embodied impact includes…","choices":["Only its color","The resources and energy used across its life","Only the final purchase price"],"answer":1}
+    ]
+  },
+  {
+    "id": "human-scale",
+    "title": "Designing for People",
+    "subtitle": "Build a design around real needs and daily rituals.",
+    "level": "Intermediate",
+    "category": "Human-centered",
+    "duration": "2 lessons · 33 min",
+    "image": "https://images.unsplash.com/photo-1600607687920-4e2a09cf159d?auto=format&fit=crop&w=900&q=80",
+    "lessons": [
+      {"title":"Begin with a brief","duration":"16 min","quiz":"A strong design brief should be grounded in…","choices":["The designer's favorite style","The needs, constraints and aspirations of people","The largest possible building"],"answer":1},
+      {"title":"Human scale & proportion","duration":"17 min","quiz":"Why use a human figure in a section drawing?","choices":["To show scale and spatial experience","To decorate the page","To replace dimensions"],"answer":0}
+    ]
+  },
+  {
+    "id": "small-home",
+    "title": "The Small Home Studio",
+    "subtitle": "Develop a compact home from concept to spatial sequence.",
+    "level": "Intermediate",
+    "category": "Studio project",
+    "duration": "2 lessons · 38 min",
+    "image": "https://images.unsplash.com/photo-1600566753086-00f18fb6b3ea?auto=format&fit=crop&w=900&q=80",
+    "lessons": [
+      {"title":"Site, sun and setting","duration":"18 min","quiz":"A site analysis should include…","choices":["Sun, access, surroundings and constraints","Only the site area","The furniture schedule"],"answer":0},
+      {"title":"Organize the plan","duration":"20 min","quiz":"What helps make a compact plan feel generous?","choices":["Clear zoning and thoughtful movement","Adding more corridors","Filling every corner"],"answer":0}
+    ]
+  },
+  {
+    "id": "design-portfolio",
+    "title": "The Design Portfolio",
+    "subtitle": "Bring a resolved architectural proposal to life.",
+    "level": "Advanced",
+    "category": "Advanced studio",
+    "duration": "2 lessons · 38 min",
+    "image": "https://images.unsplash.com/photo-1511818966892-d7d671e672a2?auto=format&fit=crop&w=900&q=80",
+    "lessons": [
+      {"title":"From concept to system","duration":"20 min","quiz":"A consistent design system connects…","choices":["The concept, structure, space and material choices","Only the presentation colors","Unrelated details"],"answer":0},
+      {"title":"Make the case for your design","duration":"18 min","quiz":"A useful design presentation should…","choices":["Explain the problem, idea and decisions clearly","Show images without context","Avoid mentioning constraints"],"answer":0}
+    ]
+  }
+]
