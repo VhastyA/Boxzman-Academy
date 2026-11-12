@@ -1,0 +1,8 @@
+{
+  "name": "B Render Family Architecture Academy",
+  "description": "Learn architecture from the B Render family. Explore practical courses in architectural drawing, design, materials, and space.",
+  "prompt": "B Render Family Architecture Academy",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -772,6 +772,7 @@ function staticFile(request, response, url) {
     return;
   }
   if (pathname === "/") pathname = "/index.html";
+  if (pathname === "/b-render-logo.png" || pathname === "/favicon.ico") pathname = "/assets/b-render-logo.png";
   if (!["/index.html", "/styles.css", "/app.js", "/assets/b-render-logo.png"].includes(pathname)) {
     const applicationRoute = ["/about", "/programs", "/news", "/student/dashboard", "/admin/dashboard"].includes(pathname) ||
       /^\/programs\/[a-zA-Z0-9_-]+$/.test(pathname);
@@ -797,7 +798,6 @@ function staticFile(request, response, url) {
 
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
-  response.setHeader("X-Frame-Options", "DENY");
   response.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   response.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
   try {
