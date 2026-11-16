@@ -21,24 +21,34 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body class="university-site br-site academy-site">
-    <header class="university-header br-header academy-header">
-      <a class="university-brand br-brand" href="/" data-route="/" aria-label="B Render Family Architecture Academy home">
+    <div class="mobile-topbar">
+      <a class="university-brand br-brand" href="/" data-route="/" aria-label="B-RENDER ACADEMY home">
         <img class="br-logo" src="/assets/b-render-logo.png" alt="B Render" />
-        <span><small>FAMILY ARCHITECTURE ACADEMY</small></span>
+        <span><small>B-RENDER ACADEMY</small></span>
       </a>
-      <button class="mobile-menu" id="menu-toggle" aria-label="Toggle navigation" aria-expanded="false">
-        <span></span><span></span>
+      <button class="mobile-menu" id="menu-toggle" type="button" aria-label="Open navigation sidebar" aria-expanded="false">
+        <span></span><span></span><span></span>
       </button>
+    </div>
+    <div class="sidebar-backdrop" id="sidebar-backdrop" hidden></div>
+
+    <header class="university-header br-header academy-header" id="app-sidebar">
+      <div class="sidebar-top-row">
+        <a class="university-brand br-brand" href="/" data-route="/" aria-label="B-RENDER ACADEMY home">
+          <img class="br-logo" src="/assets/b-render-logo.png" alt="B Render" />
+          <span><small>B-RENDER ACADEMY</small></span>
+        </a>
+        <button class="sidebar-close" id="sidebar-close" type="button" aria-label="Close navigation sidebar">×</button>
+      </div>
       <nav class="sidebar-nav university-nav" aria-label="Main navigation">
-        <a class="sidebar-link active" href="/" data-route="/">Home</a>
-        <a class="sidebar-link" href="/about" data-route="/about">About the academy</a>
-        <a class="sidebar-link" href="/programs" data-route="/programs">Courses</a>
-        <a class="sidebar-link" href="/news" data-route="/news">Learning approach</a>
-        <a class="sidebar-link" href="/student/dashboard" data-route="/student/dashboard">My learning</a>
+        <a class="sidebar-link active" href="/" data-route="/"><span class="nav-icon" aria-hidden="true">⌂</span>Home</a>
+        <a class="sidebar-link" href="/about" data-route="/about"><span class="nav-icon" aria-hidden="true">◈</span>About the academy</a>
+        <a class="sidebar-link" href="/programs" data-route="/programs"><span class="nav-icon" aria-hidden="true">▦</span>Courses</a>
+        <a class="sidebar-link" href="/news" data-route="/news"><span class="nav-icon" aria-hidden="true">✦</span>Learning approach</a>
+        <a class="sidebar-link" href="/student/dashboard" data-route="/student/dashboard"><span class="nav-icon" aria-hidden="true">▷</span>My learning</a>
       </nav>
       <div class="university-actions br-header-actions">
-        <button class="br-header-contact" id="sign-in-open" type="button">Student sign in <span aria-hidden="true">↗</span></button>
-        <button class="university-profile" id="profile-open" type="button" aria-label="Open student profile"><span id="profile-avatar">B</span></button>
+        <button class="br-header-contact" id="sign-in-open" type="button">Sign in</button>
       </div>
     </header>
 
@@ -92,14 +102,6 @@
           </div>
           <div class="program-controls">
             <label class="program-search"><span aria-hidden="true">⌕</span><input id="course-search" type="search" placeholder="Search courses" aria-label="Search courses" /></label>
-            <label class="filter-label">Level
-              <select id="level-filter" aria-label="Filter courses by level">
-                <option value="all">All levels</option>
-                <option value="Beginner">Beginner</option>
-                <option value="Intermediate">Intermediate</option>
-                <option value="Advanced">Advanced</option>
-              </select>
-            </label>
           </div>
         </div>
         <div class="course-filter-status" id="course-filter-status" aria-live="polite">
@@ -142,7 +144,6 @@
       </section>
 
       <div class="academy-legacy-tools" aria-hidden="true">
-        <select id="hero-level-filter"><option value="all">All levels</option><option value="Beginner">Beginner</option><option value="Intermediate">Intermediate</option><option value="Advanced">Advanced</option></select>
         <span id="profile-name"></span><span id="hero-avatar"></span>
         <button id="hero-profile-open" type="button"></button><button id="join-open" type="button"></button>
         <button id="admin-open" type="button"></button><button id="live-lessons-open" type="button"></button>
@@ -155,7 +156,7 @@
       <div class="footer-brand">
         <a class="university-brand br-brand" href="/" data-route="/" aria-label="B Render Family Architecture Academy home">
           <img class="br-logo" src="/assets/b-render-logo.png" alt="B Render" />
-          <span><small>FAMILY ARCHITECTURE ACADEMY</small></span>
+          <span><small>B-RENDER ACADEMY</small></span>
         </a>
         <p>Architecture, taught with purpose.<br />Learn at your own pace.</p>
       </div>
@@ -173,6 +174,7 @@
     </div>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <span class="today-label" id="today-label" hidden></span>
+    <script src="https://js.paystack.co/v2/inline.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

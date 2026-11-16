@@ -11,8 +11,11 @@ const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : pat
 const VIDEO_DIR = path.join(DATA_DIR, "videos");
 const DB_PATH = path.join(DATA_DIR, "forma.sqlite");
 const ADMIN_PASSWORD_PATH = path.join(ROOT, ".admin-password");
-const PORT = Number(process.env.PORT || 3000);
+const envPort = Number(process.env.PORT);
+const PORT = envPort && envPort !== 8080 ? envPort : 3000;
 const PRICE_MINOR = 18000;
+const PAYMENT_CURRENCY = "GHS";
+const PAYSTACK_SECRET_KEY = (process.env.PAYSTACK_SECRET_KEY || "").trim();
 const MAX_JSON_BYTES = 1024 * 1024;
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 const SESSION_DAYS = 30;
@@ -41,10 +44,11 @@ database.exec(`
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     subtitle TEXT NOT NULL,
-    level TEXT NOT NULL CHECK (level IN ('Beginner', 'Intermediate', 'Advanced')),
+    level TEXT NOT NULL,
     category TEXT NOT NULL,
     duration TEXT NOT NULL,
     image TEXT NOT NULL,
+    price_minor INTEGER NOT NULL DEFAULT 18000,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
   CREATE TABLE IF NOT EXISTS lessons (
@@ -78,8 +82,22 @@ database.exec(`
     course_id TEXT NOT NULL REFERENCES courses(id),
     method TEXT NOT NULL,
     status TEXT NOT NULL,
+    paystack_reference TEXT,
     expires_at INTEGER NOT NULL,
     used_at INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS paystack_transactions (
+    reference TEXT PRIMARY KEY,
+    course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    email TEXT NOT NULL,
+    method TEXT NOT NULL,
+    amount_minor INTEGER NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'GHS',
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at INTEGER NOT NULL,
+    verified_at INTEGER,
+    claimed_at INTEGER
   );
   CREATE TABLE IF NOT EXISTS enrollments (
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -87,6 +105,7 @@ database.exec(`
     payment_method TEXT NOT NULL,
     amount_minor INTEGER NOT NULL,
     payment_status TEXT NOT NULL,
+    paystack_reference TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id, course_id)
   );
@@ -96,6 +115,59 @@ database.exec(`
     completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id, lesson_id)
   );
+`);
+
+function ensureColumn(tableName, columnName, definition) {
+  const columns = database.prepare(`PRAGMA table_info(${tableName})`).all();
+  if (!columns.some(col => col.name === columnName)) {
+    database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+  }
+}
+
+ensureColumn("payment_tickets", "paystack_reference", "TEXT");
+ensureColumn("payment_tickets", "amount_minor", "INTEGER");
+ensureColumn("enrollments", "paystack_reference", "TEXT");
+ensureColumn("users", "has_password", "INTEGER NOT NULL DEFAULT 1");
+ensureColumn("courses", "price_minor", "INTEGER NOT NULL DEFAULT 18000");
+
+function migrateCoursesTableIfNeeded() {
+  const schema = database.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'courses'").get();
+  if (!schema?.sql || !/\bCHECK\b/i.test(schema.sql)) return;
+  database.exec("PRAGMA foreign_keys = OFF;");
+  try {
+    database.exec("BEGIN");
+    database.exec(`
+      CREATE TABLE courses_migrated (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        subtitle TEXT NOT NULL,
+        level TEXT NOT NULL,
+        category TEXT NOT NULL,
+        duration TEXT NOT NULL,
+        image TEXT NOT NULL,
+        price_minor INTEGER NOT NULL DEFAULT 18000,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      INSERT INTO courses_migrated (id,title,subtitle,level,category,duration,image,price_minor,created_at)
+      SELECT id,title,subtitle,level,category,duration,image,COALESCE(price_minor, 18000),created_at FROM courses;
+      DROP TABLE courses;
+      ALTER TABLE courses_migrated RENAME TO courses;
+    `);
+    database.exec("COMMIT");
+  } catch (error) {
+    try {
+      database.exec("ROLLBACK");
+    } catch {}
+    throw error;
+  } finally {
+    database.exec("PRAGMA foreign_keys = ON;");
+  }
+}
+
+migrateCoursesTableIfNeeded();
+database.exec(`
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_tickets_reference ON payment_tickets(paystack_reference) WHERE paystack_reference IS NOT NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_enrollments_reference ON enrollments(paystack_reference) WHERE paystack_reference IS NOT NULL;
 `);
 
 function seedCourses() {
@@ -156,7 +228,7 @@ function fail(response, status, message, code) {
   jsonResponse(response, status, { error: message, code });
 }
 
-async function readJson(request) {
+async function readRawBody(request) {
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
@@ -164,15 +236,269 @@ async function readJson(request) {
     if (size > MAX_JSON_BYTES) throw Object.assign(new Error("Request body is too large."), { status: 413 });
     chunks.push(chunk);
   }
+  return Buffer.concat(chunks);
+}
+
+async function readJson(request) {
+  const raw = await readRawBody(request);
   try {
-      const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      if (!body || typeof body !== "object" || Array.isArray(body)) {
-        throw new Error("Request body must be a JSON object.");
-      }
-      return body;
-    } catch {
-      throw Object.assign(new Error("Request body must be a valid JSON object."), { status: 400 });
+    const body = JSON.parse(raw.toString("utf8"));
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      throw new Error("Request body must be a JSON object.");
+    }
+    return body;
+  } catch {
+    throw Object.assign(new Error("Request body must be a valid JSON object."), { status: 400 });
   }
+}
+
+function paystackChannelsForMethod(methodName) {
+  if (methodName === "Visa") return ["card"];
+  if (methodName === "MTN MoMo" || methodName === "Telecel Cash") return ["mobile_money"];
+  return null;
+}
+
+function callbackBaseUrl(request) {
+  const configured = (process.env.PAYSTACK_CALLBACK_BASE_URL || "").trim().replace(/\/+$/, "");
+  if (configured) return configured;
+  const protoHeader = String(request.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const hostHeader = String(request.headers["x-forwarded-host"] || request.headers.host || `localhost:${PORT}`).split(",")[0].trim();
+  const protocol = protoHeader === "https" || hostHeader.endsWith(".run.app") ? "https" : "http";
+  return `${protocol}://${hostHeader}`;
+}
+
+async function paystackApi(endpoint, options = {}) {
+  if (!PAYSTACK_SECRET_KEY) {
+    throw Object.assign(
+      new Error("Paystack is not configured on this server. Set PAYSTACK_SECRET_KEY to enable payments."),
+      { status: 503, code: "PAYSTACK_NOT_CONFIGURED" }
+    );
+  }
+  const res = await fetch(`https://api.paystack.co${endpoint}`, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+      "Content-Type": "application/json",
+      ...(options.headers || {})
+    }
+  });
+  let payload;
+  try {
+    payload = await res.json();
+  } catch {
+    throw Object.assign(new Error("Received an invalid response from Paystack."), { status: 502, code: "PAYSTACK_ERROR" });
+  }
+  if (!res.ok || !payload?.status) {
+    throw Object.assign(
+      new Error(payload?.message || "Paystack could not process this payment request."),
+      { status: res.status >= 400 && res.status < 500 ? 400 : 502, code: "PAYSTACK_ERROR" }
+    );
+  }
+  return payload.data;
+}
+
+function parsePriceMinor(rawValue) {
+  const cleaned = String(rawValue ?? "").trim();
+  if (!cleaned) return null;
+  const amountGhs = Number(cleaned);
+  if (!Number.isFinite(amountGhs) || amountGhs < 1 || amountGhs > 100000) return null;
+  return Math.round(amountGhs * 100);
+}
+
+function formatBuyerName(tx, email) {
+  const first = String(tx?.customer?.first_name || "").trim();
+  const last = String(tx?.customer?.last_name || "").trim();
+  const full = `${first} ${last}`.trim();
+  if (full.length >= 2 && full.length <= 100) return full;
+  const local = String(email || "").split("@")[0] || "";
+  const cleaned = local
+    .replace(/[._-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, ch => ch.toUpperCase());
+  if (cleaned.length >= 2 && cleaned.length <= 100) return cleaned;
+  return "Academy Student";
+}
+
+async function verifyPaystackReference(reference, session) {
+  const existingTx = database.prepare("SELECT * FROM paystack_transactions WHERE reference = ?").get(reference);
+  const user = session?.role === "student" ? session : null;
+  if (existingTx?.status === "claimed") {
+    if (user && hasEnrollment(user.id, existingTx.course_id)) {
+      return {
+        verified: true,
+        enrolled: true,
+        courseId: existingTx.course_id,
+        reference,
+        method: existingTx.method,
+        amountMinor: existingTx.amount_minor,
+        currency: existingTx.currency
+      };
+    }
+    if (!user && existingTx.user_id) {
+      const claimedUser = database.prepare("SELECT id,name,email,has_password FROM users WHERE id = ?").get(existingTx.user_id);
+      if (claimedUser && claimedUser.has_password === 0 && hasEnrollment(claimedUser.id, existingTx.course_id)) {
+        return {
+          verified: true,
+          enrolled: true,
+          autoUserId: claimedUser.id,
+          user: { id: claimedUser.id, name: claimedUser.name, email: claimedUser.email },
+          autoSignedIn: true,
+          courseId: existingTx.course_id,
+          reference,
+          method: existingTx.method,
+          amountMinor: existingTx.amount_minor,
+          currency: existingTx.currency
+        };
+      }
+    }
+    throw Object.assign(
+      new Error("This payment has already been claimed by an account."),
+      { status: 409, code: "PAYMENT_ALREADY_CLAIMED", courseId: existingTx.course_id }
+    );
+  }
+  const tx = await paystackApi(`/transaction/verify/${encodeURIComponent(reference)}`, { method: "GET" });
+  if (tx.status !== "success") {
+    throw Object.assign(
+      new Error(tx.gateway_response || "Payment was not completed."),
+      { status: 402, code: "PAYMENT_NOT_COMPLETED", courseId: existingTx?.course_id || tx.metadata?.courseId }
+    );
+  }
+  const courseId = existingTx?.course_id || String(tx.metadata?.courseId || "");
+  const course = database.prepare("SELECT id,price_minor FROM courses WHERE id = ?").get(courseId);
+  if (!course) {
+    throw Object.assign(new Error("The paid course could not be found."), { status: 404, code: "NOT_FOUND" });
+  }
+  const expectedPriceMinor = Number(existingTx?.amount_minor || course.price_minor || PRICE_MINOR);
+  if (String(tx.currency || "").toUpperCase() !== PAYMENT_CURRENCY || Number(tx.amount) < expectedPriceMinor) {
+    throw Object.assign(
+      new Error("Payment amount or currency did not match the course price."),
+      { status: 402, code: "PAYMENT_MISMATCH", courseId }
+    );
+  }
+  const methodName = existingTx?.method || String(tx.metadata?.method || (tx.channel === "mobile_money" ? "MTN MoMo" : "Visa"));
+  const customerEmail = String(tx.customer?.email || existingTx?.email || "").trim().toLowerCase();
+  const now = Date.now();
+  if (user) {
+    database.exec("BEGIN");
+    try {
+      database.prepare(
+        "INSERT OR IGNORE INTO enrollments (user_id,course_id,payment_method,amount_minor,payment_status,paystack_reference) VALUES (?,?,?,?,?,?)"
+      ).run(user.id, courseId, methodName, Number(tx.amount), "paid", reference);
+      database.prepare(`
+        INSERT INTO paystack_transactions (reference,course_id,user_id,email,method,amount_minor,currency,status,created_at,verified_at,claimed_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(reference) DO UPDATE SET
+          status = 'claimed',
+          user_id = COALESCE(excluded.user_id, paystack_transactions.user_id),
+          verified_at = COALESCE(paystack_transactions.verified_at, excluded.verified_at),
+          claimed_at = excluded.claimed_at
+      `).run(reference, courseId, user.id, customerEmail, methodName, Number(tx.amount), PAYMENT_CURRENCY, "claimed", now, now, now);
+      database.exec("COMMIT");
+    } catch (error) {
+      database.exec("ROLLBACK");
+      throw error;
+    }
+    return { verified: true, enrolled: true, courseId, reference, method: methodName, amountMinor: Number(tx.amount), currency: PAYMENT_CURRENCY };
+  }
+
+  const existingUser = customerEmail
+    ? database.prepare("SELECT id,name,email,has_password FROM users WHERE email = ?").get(customerEmail)
+    : null;
+  if (!existingUser && customerEmail) {
+    const newUserId = crypto.randomUUID();
+    const buyerName = formatBuyerName(tx, customerEmail);
+    const salt = crypto.randomBytes(16).toString("hex");
+    const randomHash = crypto.scryptSync(crypto.randomBytes(32).toString("hex"), salt, 64).toString("hex");
+    database.exec("BEGIN");
+    try {
+      database.prepare("INSERT INTO users (id,name,email,salt,password_hash,has_password) VALUES (?,?,?,?,?,0)")
+        .run(newUserId, buyerName, customerEmail, salt, randomHash);
+      database.prepare(
+        "INSERT OR IGNORE INTO enrollments (user_id,course_id,payment_method,amount_minor,payment_status,paystack_reference) VALUES (?,?,?,?,?,?)"
+      ).run(newUserId, courseId, methodName, Number(tx.amount), "paid", reference);
+      database.prepare(`
+        INSERT INTO paystack_transactions (reference,course_id,user_id,email,method,amount_minor,currency,status,created_at,verified_at,claimed_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(reference) DO UPDATE SET
+          status = 'claimed',
+          user_id = excluded.user_id,
+          verified_at = COALESCE(paystack_transactions.verified_at, excluded.verified_at),
+          claimed_at = excluded.claimed_at
+      `).run(reference, courseId, newUserId, customerEmail, methodName, Number(tx.amount), PAYMENT_CURRENCY, "claimed", now, now, now);
+      database.exec("COMMIT");
+    } catch (error) {
+      database.exec("ROLLBACK");
+      throw error;
+    }
+    return {
+      verified: true,
+      enrolled: true,
+      autoUserId: newUserId,
+      user: { id: newUserId, name: buyerName, email: customerEmail },
+      autoSignedIn: true,
+      courseId,
+      reference,
+      method: methodName,
+      amountMinor: Number(tx.amount),
+      currency: PAYMENT_CURRENCY
+    };
+  }
+  if (existingUser && (existingUser.has_password === 0 || (existingTx?.user_id && existingTx.user_id === existingUser.id))) {
+    database.exec("BEGIN");
+    try {
+      database.prepare(
+        "INSERT OR IGNORE INTO enrollments (user_id,course_id,payment_method,amount_minor,payment_status,paystack_reference) VALUES (?,?,?,?,?,?)"
+      ).run(existingUser.id, courseId, methodName, Number(tx.amount), "paid", reference);
+      database.prepare(`
+        INSERT INTO paystack_transactions (reference,course_id,user_id,email,method,amount_minor,currency,status,created_at,verified_at,claimed_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(reference) DO UPDATE SET
+          status = 'claimed',
+          user_id = excluded.user_id,
+          verified_at = COALESCE(paystack_transactions.verified_at, excluded.verified_at),
+          claimed_at = excluded.claimed_at
+      `).run(reference, courseId, existingUser.id, customerEmail, methodName, Number(tx.amount), PAYMENT_CURRENCY, "claimed", now, now, now);
+      database.exec("COMMIT");
+    } catch (error) {
+      database.exec("ROLLBACK");
+      throw error;
+    }
+    return {
+      verified: true,
+      enrolled: true,
+      autoUserId: existingUser.id,
+      user: { id: existingUser.id, name: existingUser.name, email: existingUser.email },
+      autoSignedIn: true,
+      courseId,
+      reference,
+      method: methodName,
+      amountMinor: Number(tx.amount),
+      currency: PAYMENT_CURRENCY
+    };
+  }
+
+  const ticket = crypto.randomBytes(32).toString("base64url");
+  const expiresAt = now + 30 * 60 * 1000;
+  database.exec("BEGIN");
+  try {
+    database.prepare("DELETE FROM payment_tickets WHERE paystack_reference = ? AND used_at IS NULL").run(reference);
+    database.prepare(
+      "INSERT INTO payment_tickets (token_hash,course_id,method,status,paystack_reference,amount_minor,expires_at) VALUES (?,?,?,?,?,?,?)"
+    ).run(hashToken(ticket), courseId, methodName, "paid", reference, Number(tx.amount), expiresAt);
+    database.prepare(`
+      INSERT INTO paystack_transactions (reference,course_id,user_id,email,method,amount_minor,currency,status,created_at,verified_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(reference) DO UPDATE SET
+        status = CASE WHEN paystack_transactions.status = 'claimed' THEN 'claimed' ELSE 'verified' END,
+        verified_at = COALESCE(paystack_transactions.verified_at, excluded.verified_at)
+    `).run(reference, courseId, null, customerEmail, methodName, Number(tx.amount), PAYMENT_CURRENCY, "verified", now, now);
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+  return { verified: true, enrolled: false, ticket, courseId, email: customerEmail, reference, method: methodName, amountMinor: Number(tx.amount), currency: PAYMENT_CURRENCY };
 }
 
 function cookieValue(request, name) {
@@ -185,14 +511,26 @@ function hashToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
-function sessionCookie(token, maxAge = SESSION_DAYS * 86400) {
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
-  return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure}`;
+function isHttpsRequest(request) {
+  const forwardedProto = String(request?.headers?.["x-forwarded-proto"] || "").split(",")[0].trim().toLowerCase();
+  if (forwardedProto === "https") return true;
+  if (request?.socket?.encrypted) return true;
+  const host = String(request?.headers?.host || "").toLowerCase();
+  return host.endsWith(".run.app");
 }
 
-function clearSessionCookie() {
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
-  return `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`;
+function sessionCookie(request, token, maxAge = SESSION_DAYS * 86400) {
+  const attrs = isHttpsRequest(request)
+    ? "SameSite=None; Secure; Partitioned"
+    : "SameSite=Lax";
+  return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; ${attrs}; Max-Age=${maxAge}`;
+}
+
+function clearSessionCookie(request) {
+  const attrs = isHttpsRequest(request)
+    ? "SameSite=None; Secure; Partitioned"
+    : "SameSite=Lax";
+  return `${SESSION_COOKIE}=; Path=/; HttpOnly; ${attrs}; Max-Age=0`;
 }
 
 function currentSession(request) {
@@ -207,12 +545,12 @@ function currentSession(request) {
   return user ? { ...user, role: "student" } : null;
 }
 
-function createSession(response, role, userId = null) {
+function createSession(request, response, role, userId = null) {
   const token = crypto.randomBytes(32).toString("base64url");
   const expiresAt = Date.now() + SESSION_DAYS * 86400000;
   database.prepare("INSERT INTO sessions (token_hash,user_id,role,expires_at) VALUES (?,?,?,?)")
     .run(hashToken(token), userId, role, expiresAt);
-  response.setHeader("Set-Cookie", sessionCookie(token));
+  response.setHeader("Set-Cookie", sessionCookie(request, token));
 }
 
 function requireStudent(request, response) {
@@ -240,7 +578,7 @@ function hasEnrollment(userId, courseId) {
 
 function publicCourses() {
   return database.prepare(`
-    SELECT c.id,c.title,c.subtitle,c.level,c.category,c.duration,c.image,
+    SELECT c.id,c.title,c.subtitle,c.level,c.category,c.duration,c.image,c.price_minor,
       COUNT(l.id) AS lesson_count
     FROM courses c LEFT JOIN lessons l ON l.course_id = c.id
     GROUP BY c.id ORDER BY c.created_at,c.title
@@ -249,7 +587,7 @@ function publicCourses() {
 
 function publicCourse(courseId, user = null) {
   const course = database.prepare(
-    "SELECT id,title,subtitle,level,category,duration,image FROM courses WHERE id = ?"
+    "SELECT id,title,subtitle,level,category,duration,image,price_minor FROM courses WHERE id = ?"
   ).get(courseId);
   if (!course) return null;
   const lessons = database.prepare(
@@ -270,7 +608,7 @@ function verifyPassword(password, salt, expectedHash) {
   return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
 }
 
-async function registerStudent(response, body) {
+async function registerStudent(request, response, body) {
   const name = typeof body.name === "string" ? body.name.trim() : "";
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
   const password = typeof body.password === "string" ? body.password : "";
@@ -280,7 +618,7 @@ async function registerStudent(response, body) {
     return;
   }
   const payment = database.prepare(
-    "SELECT token_hash,course_id,method FROM payment_tickets WHERE token_hash = ? AND status = 'demo_paid' AND used_at IS NULL AND expires_at > ?"
+    "SELECT token_hash,course_id,method,status,paystack_reference,amount_minor FROM payment_tickets WHERE token_hash = ? AND status IN ('paid','demo_paid') AND used_at IS NULL AND expires_at > ?"
   ).get(hashToken(ticket), Date.now());
   if (!payment) {
     fail(response, 402, "A valid completed course payment is required before creating an account.", "PAYMENT_REQUIRED");
@@ -293,24 +631,31 @@ async function registerStudent(response, body) {
   const id = crypto.randomUUID();
   const salt = crypto.randomBytes(16).toString("hex");
   const passwordHash = crypto.scryptSync(password, salt, 64).toString("hex");
+  const now = Date.now();
+  const paidCourse = database.prepare("SELECT price_minor FROM courses WHERE id = ?").get(payment.course_id);
+  const ticketAmountMinor = Number(payment.amount_minor || paidCourse?.price_minor || PRICE_MINOR);
   database.exec("BEGIN");
   try {
-    database.prepare("INSERT INTO users (id,name,email,salt,password_hash) VALUES (?,?,?,?,?)")
+    database.prepare("INSERT INTO users (id,name,email,salt,password_hash,has_password) VALUES (?,?,?,?,?,1)")
       .run(id, name, email, salt, passwordHash);
-    database.prepare("INSERT INTO enrollments (user_id,course_id,payment_method,amount_minor,payment_status) VALUES (?,?,?,?,?)")
-      .run(id, payment.course_id, payment.method, PRICE_MINOR, "demo_paid");
+    database.prepare("INSERT INTO enrollments (user_id,course_id,payment_method,amount_minor,payment_status,paystack_reference) VALUES (?,?,?,?,?,?)")
+      .run(id, payment.course_id, payment.method, ticketAmountMinor, payment.status, payment.paystack_reference || null);
     database.prepare("UPDATE payment_tickets SET used_at = ? WHERE token_hash = ?")
-      .run(Date.now(), payment.token_hash);
+      .run(now, payment.token_hash);
+    if (payment.paystack_reference) {
+      database.prepare("UPDATE paystack_transactions SET status = 'claimed', claimed_at = ?, user_id = ? WHERE reference = ?")
+        .run(now, id, payment.paystack_reference);
+    }
     database.exec("COMMIT");
   } catch (error) {
     database.exec("ROLLBACK");
     throw error;
   }
-  createSession(response, "student", id);
-  jsonResponse(response, 201, { user: { id, name, email }, enrolledCourseIds: [payment.course_id], demoPayment: true });
+  createSession(request, response, "student", id);
+  jsonResponse(response, 201, { user: { id, name, email }, enrolledCourseIds: [payment.course_id], paid: true });
 }
 
-async function loginStudent(response, body) {
+async function loginStudent(request, response, body) {
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
   const password = typeof body.password === "string" ? body.password : "";
   const ticket = typeof body.ticket === "string" ? body.ticket : "";
@@ -322,27 +667,41 @@ async function loginStudent(response, body) {
   let addedCourseId = null;
   if (ticket) {
     const payment = database.prepare(
-      "SELECT token_hash,course_id,method FROM payment_tickets WHERE token_hash = ? AND status = 'demo_paid' AND used_at IS NULL AND expires_at > ?"
+      "SELECT token_hash,course_id,method,status,paystack_reference,amount_minor FROM payment_tickets WHERE token_hash = ? AND status IN ('paid','demo_paid') AND used_at IS NULL AND expires_at > ?"
     ).get(hashToken(ticket), Date.now());
     if (!payment) {
       fail(response, 402, "The payment ticket is invalid or expired. Please start checkout again.", "PAYMENT_REQUIRED");
       return;
     }
-    database.prepare("INSERT OR IGNORE INTO enrollments (user_id,course_id,payment_method,amount_minor,payment_status) VALUES (?,?,?,?,?)")
-      .run(user.id, payment.course_id, payment.method, PRICE_MINOR, "demo_paid");
-    database.prepare("UPDATE payment_tickets SET used_at = ? WHERE token_hash = ?").run(Date.now(), payment.token_hash);
+    const now = Date.now();
+    const paidCourse = database.prepare("SELECT price_minor FROM courses WHERE id = ?").get(payment.course_id);
+    const ticketAmountMinor = Number(payment.amount_minor || paidCourse?.price_minor || PRICE_MINOR);
+    database.exec("BEGIN");
+    try {
+      database.prepare("INSERT OR IGNORE INTO enrollments (user_id,course_id,payment_method,amount_minor,payment_status,paystack_reference) VALUES (?,?,?,?,?,?)")
+        .run(user.id, payment.course_id, payment.method, ticketAmountMinor, payment.status, payment.paystack_reference || null);
+      database.prepare("UPDATE payment_tickets SET used_at = ? WHERE token_hash = ?").run(now, payment.token_hash);
+      if (payment.paystack_reference) {
+        database.prepare("UPDATE paystack_transactions SET status = 'claimed', claimed_at = ?, user_id = ? WHERE reference = ?")
+          .run(now, user.id, payment.paystack_reference);
+      }
+      database.exec("COMMIT");
+    } catch (error) {
+      database.exec("ROLLBACK");
+      throw error;
+    }
     addedCourseId = payment.course_id;
   } else if (!database.prepare("SELECT 1 FROM enrollments WHERE user_id = ?").get(user.id)) {
     fail(response, 402, "Complete a course payment before signing in.", "PAYMENT_REQUIRED");
     return;
   }
-  createSession(response, "student", user.id);
+  createSession(request, response, "student", user.id);
   const enrollments = database.prepare("SELECT course_id FROM enrollments WHERE user_id = ?").all(user.id).map(row => row.course_id);
   jsonResponse(response, 200, {
     user: { id: user.id, name: user.name, email: user.email },
     enrolledCourseIds: enrollments,
     addedCourseId,
-    demoPayment: Boolean(addedCourseId)
+    paid: Boolean(addedCourseId)
   });
 }
 
@@ -458,9 +817,14 @@ async function addAdminLesson(request, response, courseId, createCourse = false)
   }
   if (!courseId) {
     const courseTitle = String(form.get("courseTitle") || "").trim();
-    const level = String(form.get("level") || "");
-    if (courseTitle.length < 2 || courseTitle.length > 160 || !["Beginner", "Intermediate", "Advanced"].includes(level)) {
-      fail(response, 400, "Choose a course title and valid learning level.", "INVALID_COURSE");
+    const level = String(form.get("level") || "").trim();
+    const priceMinor = parsePriceMinor(form.get("price"));
+    if (courseTitle.length < 2 || courseTitle.length > 160 || level.length < 2 || level.length > 40) {
+      fail(response, 400, "Enter a course title (2–160 characters) and a learning level (2–40 characters).", "INVALID_COURSE");
+      return;
+    }
+    if (!priceMinor) {
+      fail(response, 400, "Enter a valid course price in GHS (between 1.00 and 100,000.00).", "INVALID_PRICE");
       return;
     }
     const subtitle = String(form.get("subtitle") || "A guided architecture design course.").trim();
@@ -493,7 +857,7 @@ async function addAdminLesson(request, response, courseId, createCourse = false)
     if (!createCourse && existing) course = existing;
     else {
       const id = `course-${crypto.randomUUID()}`;
-      newCourse = { id, title: courseTitle, subtitle, level, category, image };
+      newCourse = { id, title: courseTitle, subtitle, level, category, image, priceMinor };
       course = { id };
     }
   }
@@ -510,8 +874,8 @@ async function addAdminLesson(request, response, courseId, createCourse = false)
     await fs.promises.writeFile(destination, Buffer.from(await file.arrayBuffer()), { flag: "wx" });
     database.exec("BEGIN");
     if (newCourse) {
-      database.prepare("INSERT INTO courses (id,title,subtitle,level,category,duration,image) VALUES (?,?,?,?,?,?,?)")
-        .run(newCourse.id, newCourse.title, newCourse.subtitle, newCourse.level, newCourse.category, "1 lesson", newCourse.image);
+      database.prepare("INSERT INTO courses (id,title,subtitle,level,category,duration,image,price_minor) VALUES (?,?,?,?,?,?,?,?)")
+        .run(newCourse.id, newCourse.title, newCourse.subtitle, newCourse.level, newCourse.category, "1 lesson", newCourse.image, newCourse.priceMinor);
     }
     const last = database.prepare("SELECT COALESCE(MAX(sort_order), -1) AS last FROM lessons WHERE course_id = ?").get(course.id).last;
     database.prepare("INSERT INTO lessons (id,course_id,title,duration,quiz,choices_json,answer_index,video_file,sort_order) VALUES (?,?,?,?,?,?,?,?,?)")
@@ -562,45 +926,175 @@ async function api(request, response, url) {
     await addAdminLesson(request, response, null, true);
     return;
   }
-  if (method === "POST" && pathname === "/api/checkout/simulate") {
+  if (method === "POST" && pathname === "/api/checkout/initialize") {
     const body = await readJson(request);
-    const courseId = typeof body.courseId === "string" ? body.courseId : "";
-    const methodName = typeof body.method === "string" ? body.method : "";
-    if (!database.prepare("SELECT 1 FROM courses WHERE id = ?").get(courseId)) {
+    const courseId = typeof body.courseId === "string" ? body.courseId.trim() : "";
+    const methodName = typeof body.method === "string" ? body.method.trim() : "";
+    const user = session?.role === "student" ? session : null;
+    const rawEmail = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    const email = user ? user.email.toLowerCase() : rawEmail;
+    const course = database.prepare("SELECT id,title,price_minor FROM courses WHERE id = ?").get(courseId);
+    if (!course) {
       fail(response, 404, "Course not found.", "NOT_FOUND");
       return;
     }
-    if (!["MTN MoMo", "Telecel Cash", "Visa"].includes(methodName)) {
+    const coursePriceMinor = Number(course.price_minor) > 0 ? Number(course.price_minor) : PRICE_MINOR;
+    const channels = paystackChannelsForMethod(methodName);
+    if (!channels) {
       fail(response, 400, "Choose MTN MoMo, Telecel Cash, or Visa.", "INVALID_PAYMENT_METHOD");
       return;
     }
-    const user = session?.role === "student" ? session : null;
-    if (user) {
-      database.prepare("INSERT OR IGNORE INTO enrollments (user_id,course_id,payment_method,amount_minor,payment_status) VALUES (?,?,?,?,?)")
-        .run(user.id, courseId, methodName, PRICE_MINOR, "demo_paid");
-      jsonResponse(response, 200, { demo: true, enrolled: true, courseId });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      fail(response, 400, "Enter a valid email address for your payment receipt.", "INVALID_EMAIL");
       return;
     }
-    const ticket = crypto.randomBytes(32).toString("base64url");
-    database.prepare("INSERT INTO payment_tickets (token_hash,course_id,method,status,expires_at) VALUES (?,?,?,?,?)")
-      .run(hashToken(ticket), courseId, methodName, "demo_paid", Date.now() + 30 * 60 * 1000);
-    jsonResponse(response, 200, { demo: true, enrolled: false, ticket });
+    if (user && hasEnrollment(user.id, courseId)) {
+      fail(response, 409, "You are already enrolled in this course.", "ALREADY_ENROLLED");
+      return;
+    }
+    const reference = `BR-${crypto.randomBytes(12).toString("hex").toUpperCase()}`;
+    const callbackUrl = `${callbackBaseUrl(request)}/api/checkout/callback`;
+    const paystackData = await paystackApi("/transaction/initialize", {
+      method: "POST",
+      body: JSON.stringify({
+        email,
+        amount: coursePriceMinor,
+        currency: PAYMENT_CURRENCY,
+        reference,
+        channels,
+        callback_url: callbackUrl,
+        metadata: {
+          courseId: course.id,
+          courseTitle: course.title,
+          method: methodName,
+          userId: user ? user.id : null
+        }
+      })
+    });
+    database.prepare(`
+      INSERT INTO paystack_transactions (reference,course_id,user_id,email,method,amount_minor,currency,status,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?)
+    `).run(reference, course.id, user ? user.id : null, email, methodName, coursePriceMinor, PAYMENT_CURRENCY, "pending", Date.now());
+    jsonResponse(response, 200, {
+      reference,
+      accessCode: paystackData.access_code,
+      authorizationUrl: paystackData.authorization_url,
+      amountMinor: coursePriceMinor,
+      currency: PAYMENT_CURRENCY,
+      email
+    });
+    return;
+  }
+  if (method === "GET" && (pathname === "/api/checkout/callback" || pathname === "/paystack/callback")) {
+    const reference = String(url.searchParams.get("reference") || url.searchParams.get("trxref") || "").trim();
+    if (!reference || reference.length > 120) {
+      response.writeHead(302, { Location: `/?payment_error=${encodeURIComponent("Missing Paystack payment reference.")}` });
+      response.end();
+      return;
+    }
+    try {
+      const result = await verifyPaystackReference(reference, session);
+      if (result.autoUserId) {
+        createSession(request, response, "student", result.autoUserId);
+      }
+      const location = result.enrolled
+        ? `/programs/${encodeURIComponent(result.courseId)}?payment=success&reference=${encodeURIComponent(reference)}`
+        : `/programs/${encodeURIComponent(result.courseId)}?reference=${encodeURIComponent(reference)}`;
+      response.writeHead(302, { Location: location });
+      response.end();
+    } catch (error) {
+      const targetPath = error.courseId ? `/programs/${encodeURIComponent(error.courseId)}` : "/";
+      response.writeHead(302, { Location: `${targetPath}?payment_error=${encodeURIComponent(error.message)}&reference=${encodeURIComponent(reference)}` });
+      response.end();
+    }
+    return;
+  }
+  if (method === "POST" && pathname === "/api/checkout/verify") {
+    const body = await readJson(request);
+    const reference = typeof body.reference === "string" ? body.reference.trim() : "";
+    if (!reference || reference.length > 120) {
+      fail(response, 400, "A valid payment reference is required.", "INVALID_REFERENCE");
+      return;
+    }
+    const result = await verifyPaystackReference(reference, session);
+    if (result.autoUserId) {
+      createSession(request, response, "student", result.autoUserId);
+      delete result.autoUserId;
+    }
+    jsonResponse(response, 200, result);
+    return;
+  }
+  if (method === "POST" && pathname === "/api/webhooks/paystack") {
+    if (!PAYSTACK_SECRET_KEY) {
+      fail(response, 503, "Paystack is not configured.", "PAYSTACK_NOT_CONFIGURED");
+      return;
+    }
+    const signature = String(request.headers["x-paystack-signature"] || "");
+    const rawBody = await readRawBody(request);
+    const expected = crypto.createHmac("sha512", PAYSTACK_SECRET_KEY).update(rawBody).digest("hex");
+    if (!signature || !safeEqualText(signature, expected)) {
+      fail(response, 401, "Invalid Paystack webhook signature.", "INVALID_SIGNATURE");
+      return;
+    }
+    let event;
+    try {
+      event = JSON.parse(rawBody.toString("utf8"));
+    } catch {
+      fail(response, 400, "Invalid JSON payload.", "INVALID_JSON");
+      return;
+    }
+    if (event?.event === "charge.success" && event?.data) {
+      const tx = event.data;
+      const reference = String(tx.reference || "").trim();
+      const existingTx = reference ? database.prepare("SELECT * FROM paystack_transactions WHERE reference = ?").get(reference) : null;
+      const courseId = existingTx?.course_id || String(tx.metadata?.courseId || "");
+      const course = courseId ? database.prepare("SELECT id,price_minor FROM courses WHERE id = ?").get(courseId) : null;
+      const expectedAmountMinor = Number(existingTx?.amount_minor || course?.price_minor || PRICE_MINOR);
+      if (reference && course && tx.status === "success" && String(tx.currency || "").toUpperCase() === PAYMENT_CURRENCY && Number(tx.amount) >= expectedAmountMinor) {
+        const methodName = existingTx?.method || String(tx.metadata?.method || (tx.channel === "mobile_money" ? "MTN MoMo" : "Visa"));
+        const customerEmail = String(tx.customer?.email || existingTx?.email || "").trim().toLowerCase();
+        const userId = existingTx?.user_id || tx.metadata?.userId || null;
+        const validUser = userId ? database.prepare("SELECT id FROM users WHERE id = ?").get(userId) : null;
+        const now = Date.now();
+        database.exec("BEGIN");
+        try {
+          if (validUser) {
+            database.prepare(
+              "INSERT OR IGNORE INTO enrollments (user_id,course_id,payment_method,amount_minor,payment_status,paystack_reference) VALUES (?,?,?,?,?,?)"
+            ).run(validUser.id, course.id, methodName, Number(tx.amount), "paid", reference);
+          }
+          database.prepare(`
+            INSERT INTO paystack_transactions (reference,course_id,user_id,email,method,amount_minor,currency,status,created_at,verified_at,claimed_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(reference) DO UPDATE SET
+              status = CASE WHEN excluded.status = 'claimed' OR paystack_transactions.status = 'claimed' THEN 'claimed' ELSE 'verified' END,
+              verified_at = COALESCE(paystack_transactions.verified_at, excluded.verified_at),
+              claimed_at = COALESCE(paystack_transactions.claimed_at, excluded.claimed_at)
+          `).run(reference, course.id, validUser ? validUser.id : null, customerEmail, methodName, Number(tx.amount), PAYMENT_CURRENCY, validUser ? "claimed" : "verified", now, now, validUser ? now : null);
+          database.exec("COMMIT");
+        } catch (error) {
+          database.exec("ROLLBACK");
+          throw error;
+        }
+      }
+    }
+    jsonResponse(response, 200, { received: true });
     return;
   }
   if (method === "POST" && pathname === "/api/auth/register") {
     const body = await readJson(request);
-    await registerStudent(response, body);
+    await registerStudent(request, response, body);
     return;
   }
   if (method === "POST" && pathname === "/api/auth/login") {
     const body = await readJson(request);
-    await loginStudent(response, body);
+    await loginStudent(request, response, body);
     return;
   }
   if (method === "POST" && pathname === "/api/auth/logout") {
     const token = cookieValue(request, SESSION_COOKIE);
     if (token) database.prepare("DELETE FROM sessions WHERE token_hash = ?").run(hashToken(token));
-    jsonResponse(response, 200, { ok: true }, { "Set-Cookie": clearSessionCookie() });
+    jsonResponse(response, 200, { ok: true }, { "Set-Cookie": clearSessionCookie(request) });
     return;
   }
   if (method === "POST" && pathname === "/api/admin/login") {
@@ -609,7 +1103,7 @@ async function api(request, response, url) {
       fail(response, 401, "Admin password is incorrect.", "INVALID_CREDENTIALS");
       return;
     }
-    createSession(response, "admin");
+    createSession(request, response, "admin");
     jsonResponse(response, 200, { ok: true });
     return;
   }
@@ -714,6 +1208,30 @@ async function api(request, response, url) {
     await addAdminLesson(request, response, decodeURIComponent(adminCourseMatch[1]));
     return;
   }
+  const adminCourseMatchForUpdate = /^\/api\/admin\/courses\/([^/]+)$/.exec(pathname);
+  if (method === "PATCH" && adminCourseMatchForUpdate) {
+    if (!requireAdmin(request, response)) return;
+    const courseId = decodeURIComponent(adminCourseMatchForUpdate[1]);
+    const existingCourse = database.prepare("SELECT id,level,price_minor FROM courses WHERE id = ?").get(courseId);
+    if (!existingCourse) {
+      fail(response, 404, "Course not found.", "NOT_FOUND");
+      return;
+    }
+    const body = await readJson(request);
+    const level = typeof body.level === "string" ? body.level.trim() : existingCourse.level;
+    const priceMinor = body.price !== undefined ? parsePriceMinor(body.price) : existingCourse.price_minor;
+    if (!level || level.length < 2 || level.length > 40) {
+      fail(response, 400, "Enter a learning level between 2 and 40 characters.", "INVALID_COURSE");
+      return;
+    }
+    if (!priceMinor) {
+      fail(response, 400, "Enter a valid course price in GHS (between 1.00 and 100,000.00).", "INVALID_PRICE");
+      return;
+    }
+    database.prepare("UPDATE courses SET level = ?, price_minor = ? WHERE id = ?").run(level, priceMinor, courseId);
+    jsonResponse(response, 200, { course: publicCourse(courseId) });
+    return;
+  }
   const adminCourseMatchForDelete = /^\/api\/admin\/courses\/([^/]+)$/.exec(pathname);
   if (method === "DELETE" && adminCourseMatchForDelete) {
     if (!requireAdmin(request, response)) return;
@@ -801,7 +1319,7 @@ const server = http.createServer(async (request, response) => {
   response.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   response.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
   try {
-    if (url.pathname.startsWith("/api/")) {
+    if (url.pathname.startsWith("/api/") || url.pathname === "/paystack/callback") {
       await api(request, response, url);
     } else if (request.method === "GET" || request.method === "HEAD") {
       staticFile(request, response, url);
@@ -810,14 +1328,16 @@ const server = http.createServer(async (request, response) => {
     }
   } catch (error) {
     console.error(`${request.method} ${url.pathname}:`, error);
-    if (!response.headersSent) fail(response, error.status || 500, error.status ? error.message : "The server could not complete the request.", "SERVER_ERROR");
+    if (!response.headersSent) fail(response, error.status || 500, error.status ? error.message : "The server could not complete the request.", error.code || "SERVER_ERROR");
     else response.destroy(error);
   }
 });
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log(`B Render Family Architecture Academy running at http://localhost:${PORT}`);
-  console.log("Demo payments only. Configure a real payment provider before accepting money.");
+  if (!PAYSTACK_SECRET_KEY) {
+    console.warn("PAYSTACK_SECRET_KEY is not set. Checkout initialization will return 503 until configured.");
+  }
 });
 
 function shutdown() {

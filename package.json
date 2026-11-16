@@ -5,7 +5,7 @@
   "description": "B Render architectural visualization website",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js",
+    "dev": "PORT=3000 node server.js",
     "build": "echo 'Build complete'",
     "lint": "echo 'No lint errors'"
   },
